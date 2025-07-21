@@ -2101,109 +2101,6 @@ def handle_start_transcription():
         app.logger.error(f"Error starting real-time transcription: {e}", exc_info=True)
         emit('transcription_error', {'error': str(e)})
 
-@socketio.on('audio_chunk')
-@login_required
-def handle_audio_chunk(data):
-    """Process an audio chunk for real-time transcription"""
-    session_id = data.get('session_id')
-    chunk = data.get('chunk')
-
-    if not session_id or not chunk:
-        return
-
-    try:
-        recording = db.session.get(Recording, session_id)
-        if not recording:
-            emit('transcription_error', {'error': 'Session not found'})
-            return
-            
-        if recording.user_id != current_user.id:
-            emit('transcription_error', {'error': 'Unauthorized'})
-            return
-            
-        # Save chunk temporarily
-        chunk_filename = f"chunk_{session_id}_{datetime.now().strftime('%Y%m%d%H%M%S%f')}.webm"
-        chunk_path = os.path.join(app.config['UPLOAD_FOLDER'], chunk_filename)
-        with open(chunk_path, 'wb') as f:
-            f.write(chunk)
-        
-            
-        # Transcribe chunk
-        try:
-            with open(chunk_path, 'rb') as audio_file:
-                if USE_ASR_ENDPOINT:
-                    # Use ASR endpoint for chunk transcription
-                    url = f"{ASR_BASE_URL}/asr"
-                    params = {
-                        'encode': True,
-                        'task': 'transcribe',
-                        'output': 'json'
-                    }
-                    
-                    user_transcription_language = current_user.transcription_language if current_user else None
-                    if user_transcription_language:
-                        params['language'] = user_transcription_language
-                        
-                    files = {'audio_file': (chunk_filename, audio_file, 'audio/webm')}
-                    
-                    with httpx.Client() as client:
-                        response = client.post(url, params=params, files=files, timeout=30)
-                        response.raise_for_status()
-                        asr_data = response.json()
-                        
-                        # Extract text from ASR response
-                        chunk_text = ""
-                        if 'segments' in asr_data:
-                            chunk_text = " ".join([seg.get('text', '') for seg in asr_data['segments']])
-                        elif 'text' in asr_data:
-                            chunk_text = asr_data['text']
-                            
-                else:
-                    # Use OpenAI Whisper API for chunk transcription
-                    transcription_client = OpenAI(
-                        api_key=transcription_api_key,
-                        base_url=transcription_base_url,
-                        http_client=http_client_no_proxy
-                    )
-                    whisper_model = os.environ.get("WHISPER_MODEL", "Systran/faster-distil-whisper-large-v3")
-                    
-                    transcription_params = {
-                        "model": whisper_model,
-                        "file": audio_file
-                    }
-                    
-                    user_transcription_language = current_user.transcription_language if current_user else None
-                    if user_transcription_language:
-                        transcription_params["language"] = user_transcription_language
-                        
-                    transcript = transcription_client.audio.transcriptions.create(**transcription_params)
-                    chunk_text = transcript.text
-                    
-        except Exception as e:
-            app.logger.error(f"Error transcribing chunk: {e}")
-            chunk_text = ""
-            
-        finally:
-            # Clean up chunk file
-            if os.path.exists(chunk_path):
-                os.remove(chunk_path)
-                
-        # Update recording with new transcription
-        if chunk_text.strip():
-            current_transcription = recording.transcription or ""
-            recording.transcription = current_transcription + " " + chunk_text.strip()
-            recording.file_size += len(chunk)
-            db.session.commit()
-            
-            emit('new_transcription', {
-                'chunk_text': chunk_text.strip(),
-                'full_transcription': recording.transcription
-            })
-        
-    except Exception as e:
-        app.logger.error(f"Error processing real-time chunk: {e}", exc_info=True)
-        emit('transcription_error', {'error': str(e)})
-
 @socketio.on('stop_transcription')
 @login_required
 def handle_stop_transcription(data):
@@ -2221,18 +2118,25 @@ def handle_stop_transcription(data):
         if recording.user_id != current_user.id:
             emit('transcription_error', {'error': 'Unauthorized'})
             return
-            
-        # Update status and generate summary
-        recording.status = 'SUMMARIZING'
+
+        chunk = data.get('chunk')
+        if not chunk:
+            emit('transcription_error', {'error': 'No audio data received.'})
+            return
+
+        # Save the final audio file
+        filename = f"realtime_{session_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}.webm"
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        with open(filepath, 'wb') as f:
+            f.write(chunk)
+
+        recording.audio_path = filepath
+        recording.file_size = len(chunk)
         db.session.commit()
         
-        # Start summary generation in background
+        # Transcribe the audio
         start_time = datetime.utcnow()
-        thread = threading.Thread(
-            target=generate_summary_task,
-            args=(app.app_context(), recording.id, start_time)
-        )
-        thread.start()
+        transcribe_audio_task(app.app_context(), recording.id, filepath, filename, start_time)
         
         emit('session_stopped', {'recording': recording.to_dict()})
         

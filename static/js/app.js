@@ -1396,12 +1396,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 mediaRecorder.value.ondataavailable = (event) => {
                     if (event.data.size > 0) {
-                        socket.emit('audio_chunk', { session_id: realtimeSessionId.value, chunk: event.data });
+                        audioChunks.value.push(event.data);
                     }
                 };
 
                 mediaRecorder.value.onstop = () => {
-                    socket.emit('stop_transcription', { session_id: realtimeSessionId.value });
+                    const audioBlob = new Blob(audioChunks.value, { type: 'audio/webm' });
+                    socket.emit('stop_transcription', { session_id: realtimeSessionId.value, chunk: audioBlob });
+                    audioChunks.value = [];
                 };
 
                 mediaRecorder.value.start(2000);
