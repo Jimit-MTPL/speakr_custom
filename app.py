@@ -2127,18 +2127,6 @@ def handle_audio_chunk(data):
         with open(chunk_path, 'wb') as f:
             f.write(chunk)
         
-        # Convert chunk to WAV if needed
-        wav_chunk_path = chunk_path.replace('.webm', '.wav')
-        try:
-            subprocess.run(
-                ['ffmpeg', '-i', chunk_path, '-y', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1', wav_chunk_path],
-                check=True, capture_output=True, text=True
-            )
-            os.remove(chunk_path)  # Remove original chunk
-            chunk_path = wav_chunk_path
-        except (FileNotFoundError, subprocess.CalledProcessError) as e:
-            app.logger.error(f"Failed to convert chunk: {e}")
-            # Continue with original file if conversion fails
             
         # Transcribe chunk
         try:
@@ -2156,7 +2144,7 @@ def handle_audio_chunk(data):
                     if user_transcription_language:
                         params['language'] = user_transcription_language
                         
-                    files = {'audio_file': (chunk_filename, audio_file, 'audio/wav')}
+                    files = {'audio_file': (chunk_filename, audio_file, 'audio/webm')}
                     
                     with httpx.Client() as client:
                         response = client.post(url, params=params, files=files, timeout=30)
