@@ -1348,11 +1348,129 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         };
 
+        const startTraditionalRecording = async (stream) => {
+            audioChunks.value = [];
+            mediaRecorder.value = new MediaRecorder(stream);
+            mediaRecorder.value.ondataavailable = event => {
+                audioChunks.value.push(event.data);
+            };
+            mediaRecorder.value.onstop = () => {
+                const audioBlob = new Blob(audioChunks.value, { type: 'audio/webm' });
+                audioBlobURL.value = URL.createObjectURL(audioBlob);
+                clearInterval(recordingInterval.value);
+            };
+            mediaRecorder.value.start();
+            isRecording.value = true;
+            recordingTime.value = 0;
+            recordingInterval.value = setInterval(() => {
+                recordingTime.value++;
+            }, 1000);
+        };
+
+        const startRealtimeRecording = async (stream) => {
+            try {
+                const response = await fetch('/realtime/start', { method: 'POST' });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Failed to start real-time session');
+
+                realtimeSessionId.value = data.session_id;
+                realtimeTranscription.value = '';
+                isTranscribing.value = true;
+                isRecording.value = true;
+
+                // Create a new recording object for the UI
+                realtimeRecording.value = {
+                    id: data.session_id,
+                    title: "Real-time Recording",
+                    transcription: "",
+                    status: 'PROCESSING',
+                    created_at: new Date().toISOString()
+                };
+
+                // Add to the top of the recordings list and select it
+                recordings.value.unshift(realtimeRecording.value);
+                selectRecording(realtimeRecording.value);
+
+                mediaRecorder.value = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+
+                mediaRecorder.value.ondataavailable = async (event) => {
+                    if (event.data.size > 0) {
+                        const formData = new FormData();
+                        formData.append('chunk', event.data, `chunk.webm`);
+                        try {
+                            const chunkResponse = await fetch(`/realtime/chunk/${realtimeSessionId.value}`, {
+                                method: 'POST',
+                                body: formData
+                            });
+                            const chunkData = await chunkResponse.json();
+                            if (!chunkResponse.ok) throw new Error(chunkData.error || 'Failed to process chunk');
+
+                            // Append new text to the transcription
+                            if (chunkData.chunk_text) {
+                                realtimeTranscription.value += chunkData.chunk_text + ' ';
+                                // Update the transcription in the selected recording object
+                                if (selectedRecording.value && selectedRecording.value.id === realtimeSessionId.value) {
+                                    selectedRecording.value.transcription = realtimeTranscription.value;
+                                }
+                            }
+                        } catch (error) {
+                            console.error('Error sending chunk:', error);
+                            setGlobalError(`Error sending audio chunk: ${error.message}`);
+                            stopRecording(); // Stop recording on error
+                        }
+                    }
+                };
+
+                mediaRecorder.value.onstop = async () => {
+                    if (!realtimeSessionId.value) return;
+                    try {
+                        const stopResponse = await fetch(`/realtime/stop/${realtimeSessionId.value}`, { method: 'POST' });
+                        const stopData = await stopResponse.json();
+                        if (!stopResponse.ok) throw new Error(stopData.error || 'Failed to stop session');
+
+                        // Update the recording with the final data from the server
+                        const index = recordings.value.findIndex(r => r.id === realtimeSessionId.value);
+                        if (index !== -1) {
+                            recordings.value[index] = stopData.recording;
+                        }
+                        if (selectedRecording.value?.id === realtimeSessionId.value) {
+                            selectRecording(stopData.recording);
+                        }
+                        showToast('Real-time transcription finished and saved.', 'fa-check-circle');
+
+                    } catch (error) {
+                        console.error('Error stopping session:', error);
+                        setGlobalError(`Error finalizing recording: ${error.message}`);
+                    } finally {
+                        isTranscribing.value = false;
+                        realtimeSessionId.value = null;
+                        realtimeRecording.value = null;
+                    }
+                };
+
+                // Start recording and send chunks every 2 seconds
+                mediaRecorder.value.start(2000);
+
+                // Start timer
+                recordingTime.value = 0;
+                recordingInterval.value = setInterval(() => {
+                    recordingTime.value++;
+                }, 1000);
+
+            } catch (error) {
+                console.error('Error starting real-time recording:', error);
+                setGlobalError(`Could not start real-time session: ${error.message}`);
+                isRecording.value = false;
+                isTranscribing.value = false;
+            }
+        };
+
         const stopRecording = () => {
             if (mediaRecorder.value && isRecording.value) {
                 mediaRecorder.value.stop();
                 isRecording.value = false;
-                // URL and blob are set in onstop handler
+                clearInterval(recordingInterval.value);
+                // The onstop handler will deal with API calls and cleanup
             }
         };
 
@@ -2645,7 +2763,10 @@ document.addEventListener('DOMContentLoaded', () => {
             seekAudio,
             seekAudioFromEvent,
             playerVolume,
-            onPlayerVolumeChange
+            onPlayerVolumeChange,
+            // Real-time transcription
+            isTranscribing,
+            realtimeTranscription
          }
     },
     delimiters: ['${', '}'] // Keep Vue delimiters distinct from Flask's Jinja
