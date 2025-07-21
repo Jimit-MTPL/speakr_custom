@@ -1,5 +1,6 @@
 services:
   app:
+    build: .
     image: learnedmachine/speakr:latest
     container_name: speakr
     restart: unless-stopped
