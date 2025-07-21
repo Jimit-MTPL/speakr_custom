@@ -2101,6 +2101,51 @@ def handle_start_transcription():
         app.logger.error(f"Error starting real-time transcription: {e}", exc_info=True)
         emit('transcription_error', {'error': str(e)})
 
+@socketio.on('audio_chunk')
+@login_required
+def handle_audio_chunk(data):
+    session_id = data.get('session_id')
+    chunk = data.get('chunk')
+
+    if not session_id or not chunk:
+        return
+
+    try:
+        recording = db.session.get(Recording, session_id)
+        if not recording:
+            emit('transcription_error', {'error': 'Session not found'})
+            return
+
+        # Append chunk to a temporary file
+        temp_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'temp')
+        os.makedirs(temp_dir, exist_ok=True)
+        temp_filepath = os.path.join(temp_dir, f"{session_id}.webm")
+        with open(temp_filepath, 'ab') as f:
+            f.write(chunk)
+
+        # Transcribe the chunk and emit the result
+        transcription_client = OpenAI(
+            api_key=transcription_api_key,
+            base_url=transcription_base_url,
+            http_client=http_client_no_proxy
+        )
+        whisper_model = os.environ.get("WHISPER_MODEL", "Systran/faster-distil-whisper-large-v3")
+
+        with open(temp_filepath, 'rb') as audio_file:
+            transcript = transcription_client.audio.transcriptions.create(
+                model=whisper_model,
+                file=audio_file
+            )
+
+        recording.transcription += transcript.text + " "
+        db.session.commit()
+
+        emit('new_transcription', {'full_transcription': recording.transcription})
+
+    except Exception as e:
+        app.logger.error(f"Error handling audio chunk: {e}", exc_info=True)
+        emit('transcription_error', {'error': str(e)})
+
 @socketio.on('stop_transcription')
 @login_required
 def handle_stop_transcription(data):
@@ -2119,24 +2164,21 @@ def handle_stop_transcription(data):
             emit('transcription_error', {'error': 'Unauthorized'})
             return
 
-        chunk = data.get('chunk')
-        if not chunk:
-            emit('transcription_error', {'error': 'No audio data received.'})
-            return
+        temp_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'temp')
+        temp_filepath = os.path.join(temp_dir, f"{session_id}.webm")
 
-        # Save the final audio file
-        filename = f"realtime_{session_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}.webm"
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        with open(filepath, 'wb') as f:
-            f.write(chunk)
+        if os.path.exists(temp_filepath):
+            filename = f"realtime_{session_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}.webm"
+            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            os.rename(temp_filepath, filepath)
 
-        recording.audio_path = filepath
-        recording.file_size = len(chunk)
-        db.session.commit()
-        
-        # Transcribe the audio
-        start_time = datetime.utcnow()
-        transcribe_audio_task(app.app_context(), recording.id, filepath, filename, start_time)
+            recording.audio_path = filepath
+            recording.file_size = os.path.getsize(filepath)
+            db.session.commit()
+
+            # Final transcription and summary
+            start_time = datetime.utcnow()
+            transcribe_audio_task(app.app_context(), recording.id, filepath, filename, start_time)
         
         emit('session_stopped', {'recording': recording.to_dict()})
         
