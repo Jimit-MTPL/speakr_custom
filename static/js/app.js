@@ -2766,7 +2766,8 @@ document.addEventListener('DOMContentLoaded', () => {
             onPlayerVolumeChange,
             // Real-time transcription
             isTranscribing,
-            realtimeTranscription
+            realtimeTranscription,
+            isRealtimeMode
          }
     },
     delimiters: ['${', '}'] // Keep Vue delimiters distinct from Flask's Jinja
