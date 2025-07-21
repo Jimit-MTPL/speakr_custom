@@ -2,6 +2,7 @@
 import os
 import sys
 from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, flash, Response
+from flask_socketio import SocketIO, emit
 try:
     from flask import Markup
 except ImportError:
@@ -122,6 +123,7 @@ app.config['MAX_CONTENT_LENGTH'] = 250 * 1024 * 1024  # 250MB max file size
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'default-dev-key-change-in-production')
 db = SQLAlchemy()
 db.init_app(app)
+socketio = SocketIO(app, async_mode='eventlet')
 
 # Initialize Flask-Login
 login_manager = LoginManager()
@@ -2070,9 +2072,14 @@ def toggle_highlight(recording_id):
 
 
 # Real-time transcription endpoints
-@app.route('/realtime/start', methods=['POST'])
+@socketio.on('connect')
 @login_required
-def start_realtime_transcription():
+def handle_connect():
+    app.logger.info(f"Client connected: {request.sid}")
+
+@socketio.on('start_transcription')
+@login_required
+def handle_start_transcription():
     """Start a new real-time transcription session"""
     try:
         # Create initial database entry for real-time session
@@ -2086,42 +2093,39 @@ def start_realtime_transcription():
         )
         db.session.add(recording)
         db.session.commit()
-        app.logger.info(f"Started real-time transcription session with ID: {recording.id}")
-        
-        return jsonify({
-            'session_id': recording.id,
-            'status': 'started'
-        }), 200
+        app.logger.info(f"Started real-time transcription session with ID: {recording.id} for client {request.sid}")
+        emit('session_started', {'session_id': recording.id})
         
     except Exception as e:
         db.session.rollback()
         app.logger.error(f"Error starting real-time transcription: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
+        emit('transcription_error', {'error': str(e)})
 
-@app.route('/realtime/chunk/<int:session_id>', methods=['POST'])
+@socketio.on('audio_chunk')
 @login_required
-def process_realtime_chunk(session_id):
+def handle_audio_chunk(data):
     """Process an audio chunk for real-time transcription"""
+    session_id = data.get('session_id')
+    chunk = data.get('chunk')
+
+    if not session_id or not chunk:
+        return
+
     try:
         recording = db.session.get(Recording, session_id)
         if not recording:
-            return jsonify({'error': 'Session not found'}), 404
+            emit('transcription_error', {'error': 'Session not found'})
+            return
             
         if recording.user_id != current_user.id:
-            return jsonify({'error': 'Unauthorized'}), 403
-            
-        # Get audio chunk from request
-        if 'chunk' not in request.files:
-            return jsonify({'error': 'No audio chunk provided'}), 400
-            
-        chunk_file = request.files['chunk']
-        if chunk_file.filename == '':
-            return jsonify({'error': 'Empty chunk'}), 400
+            emit('transcription_error', {'error': 'Unauthorized'})
+            return
             
         # Save chunk temporarily
         chunk_filename = f"chunk_{session_id}_{datetime.now().strftime('%Y%m%d%H%M%S%f')}.webm"
         chunk_path = os.path.join(app.config['UPLOAD_FOLDER'], chunk_filename)
-        chunk_file.save(chunk_path)
+        with open(chunk_path, 'wb') as f:
+            f.write(chunk)
         
         # Convert chunk to WAV if needed
         wav_chunk_path = chunk_path.replace('.webm', '.wav')
@@ -2200,29 +2204,35 @@ def process_realtime_chunk(session_id):
         if chunk_text.strip():
             current_transcription = recording.transcription or ""
             recording.transcription = current_transcription + " " + chunk_text.strip()
-            recording.file_size += len(chunk_file.read())  # Approximate size tracking
+            recording.file_size += len(chunk)
             db.session.commit()
             
-        return jsonify({
-            'chunk_text': chunk_text.strip(),
-            'full_transcription': recording.transcription
-        }), 200
+            emit('new_transcription', {
+                'chunk_text': chunk_text.strip(),
+                'full_transcription': recording.transcription
+            })
         
     except Exception as e:
         app.logger.error(f"Error processing real-time chunk: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
+        emit('transcription_error', {'error': str(e)})
 
-@app.route('/realtime/stop/<int:session_id>', methods=['POST'])
+@socketio.on('stop_transcription')
 @login_required
-def stop_realtime_transcription(session_id):
+def handle_stop_transcription(data):
     """Stop real-time transcription and generate summary"""
+    session_id = data.get('session_id')
+    if not session_id:
+        return
+
     try:
         recording = db.session.get(Recording, session_id)
         if not recording:
-            return jsonify({'error': 'Session not found'}), 404
+            emit('transcription_error', {'error': 'Session not found'})
+            return
             
         if recording.user_id != current_user.id:
-            return jsonify({'error': 'Unauthorized'}), 403
+            emit('transcription_error', {'error': 'Unauthorized'})
+            return
             
         # Update status and generate summary
         recording.status = 'SUMMARIZING'
@@ -2236,14 +2246,11 @@ def stop_realtime_transcription(session_id):
         )
         thread.start()
         
-        return jsonify({
-            'status': 'stopped',
-            'recording': recording.to_dict()
-        }), 200
+        emit('session_stopped', {'recording': recording.to_dict()})
         
     except Exception as e:
         app.logger.error(f"Error stopping real-time transcription: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
+        emit('transcription_error', {'error': str(e)})
 
 @app.route('/upload', methods=['POST'])
 @login_required
@@ -2423,7 +2430,5 @@ def delete_recording(recording_id):
 
 
 if __name__ == '__main__':
-    # Consider using waitress or gunicorn for production
-    # waitress-serve --host 0.0.0.0 --port 8899 app:app
-    # For development:
-    app.run(host='0.0.0.0', port=8899, debug=True) # Set debug=False if thread issues arise
+    # Use SocketIO to run the app
+    socketio.run(app, host='0.0.0.0', port=8899, debug=True)
