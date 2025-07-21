@@ -33,4 +33,4 @@ EXPOSE 8899
 
 # Set entrypoint and default command
 ENTRYPOINT ["docker-entrypoint.sh"]
-CMD ["gunicorn", "--workers", "3", "--bind", "0.0.0.0:8899", "--timeout", "600", "app:app"]
+CMD ["gunicorn", "--worker-class", "eventlet", "-w", "1", "--bind", "0.0.0.0:8899", "--timeout", "600", "app:app"]
