@@ -2168,12 +2168,12 @@ def handle_stop_transcription(data):
         temp_filepath = os.path.join(temp_dir, f"{session_id}.webm")
 
         if os.path.exists(temp_filepath):
+            recording.file_size = os.path.getsize(temp_filepath)
             filename = f"realtime_{session_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}.webm"
             filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
             os.rename(temp_filepath, filepath)
 
             recording.audio_path = filepath
-            recording.file_size = os.path.getsize(filepath)
             db.session.commit()
 
             # Final transcription and summary
