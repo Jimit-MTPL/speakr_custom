@@ -2137,8 +2137,10 @@ def handle_audio_chunk(data):
                 file=audio_file
             )
 
-        recording.transcription += transcript.text + " "
-        db.session.commit()
+        # A simple way to avoid repetition is to check if the new transcript is already in the old one
+        if transcript.text.strip() not in recording.transcription:
+            recording.transcription += transcript.text + " "
+            db.session.commit()
 
         emit('new_transcription', {'full_transcription': recording.transcription})
 
@@ -2168,17 +2170,21 @@ def handle_stop_transcription(data):
         temp_filepath = os.path.join(temp_dir, f"{session_id}.webm")
 
         if os.path.exists(temp_filepath):
-            recording.file_size = os.path.getsize(temp_filepath)
-            filename = f"realtime_{session_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}.webm"
-            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            os.rename(temp_filepath, filepath)
+            try:
+                recording.file_size = os.path.getsize(temp_filepath)
+                filename = f"realtime_{session_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}.webm"
+                filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+                os.rename(temp_filepath, filepath)
 
-            recording.audio_path = filepath
-            db.session.commit()
+                recording.audio_path = filepath
+                db.session.commit()
 
-            # Final transcription and summary
-            start_time = datetime.utcnow()
-            transcribe_audio_task(app.app_context(), recording.id, filepath, filename, start_time)
+                # Final transcription and summary
+                start_time = datetime.utcnow()
+                transcribe_audio_task(app.app_context(), recording.id, filepath, filename, start_time)
+            except Exception as e:
+                app.logger.error(f"Error processing final audio file: {e}", exc_info=True)
+                emit('transcription_error', {'error': str(e)})
         
         emit('session_stopped', {'recording': recording.to_dict()})
         
