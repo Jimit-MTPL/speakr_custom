@@ -28,6 +28,7 @@ from wtforms import StringField, PasswordField, SubmitField, BooleanField
 from wtforms.validators import DataRequired, Length, Email, EqualTo, ValidationError
 import pytz
 from babel.dates import format_datetime
+import time
 
 # Load environment variables from .env file
 load_dotenv()
@@ -2146,6 +2147,50 @@ def handle_audio_chunk(data):
         app.logger.error(f"Error handling audio chunk: {e}", exc_info=True)
         emit('transcription_error', {'error': str(e)})
 
+# @socketio.on('stop_transcription')
+# @login_required
+# def handle_stop_transcription(data):
+#     """Stop real-time transcription and generate summary"""
+#     session_id = data.get('session_id')
+#     if not session_id:
+#         return
+
+#     try:
+#         recording = db.session.get(Recording, session_id)
+#         if not recording:
+#             emit('transcription_error', {'error': 'Session not found'})
+#             return
+            
+#         if recording.user_id != current_user.id:
+#             emit('transcription_error', {'error': 'Unauthorized'})
+#             return
+
+#         temp_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'temp')
+#         temp_filepath = os.path.join(temp_dir, f"{session_id}.webm")
+
+#         if os.path.exists(temp_filepath):
+#             recording.file_size = os.path.getsize(temp_filepath)
+#             filename = f"realtime_{session_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}.webm"
+#             filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+#             os.rename(temp_filepath, filepath)
+
+#             recording.audio_path = filepath
+#             db.session.commit()
+
+#             # Final transcription and summary
+#             start_time = datetime.utcnow()
+#             thread = threading.Thread(
+#                 target=transcribe_audio_task,
+#                 args=(app.app_context(), recording.id, filepath, filename, start_time)
+#             )
+#             thread.start()
+        
+#         emit('session_stopped', {'recording': recording.to_dict()})
+        
+#     except Exception as e:
+#         app.logger.error(f"Error stopping real-time transcription: {e}", exc_info=True)
+#         emit('transcription_error', {'error': str(e)})
+
 @socketio.on('stop_transcription')
 @login_required
 def handle_stop_transcription(data):
@@ -2171,18 +2216,25 @@ def handle_stop_transcription(data):
             recording.file_size = os.path.getsize(temp_filepath)
             filename = f"realtime_{session_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}.webm"
             filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            
+            # Move the file
             os.rename(temp_filepath, filepath)
-
+            time.sleep(4)
             recording.audio_path = filepath
             db.session.commit()
 
-            # Final transcription and summary
+            # Final transcription and summary - pass the full filepath, not just filename
             start_time = datetime.utcnow()
             thread = threading.Thread(
                 target=transcribe_audio_task,
-                args=(app.app_context(), recording.id, filepath, filename, start_time)
+                args=(app.app_context(), recording.id, filepath, filename, start_time)  # filepath is the full path
             )
             thread.start()
+        else:
+            # Handle case where temp file doesn't exist
+            app.logger.warning(f"Temp file not found for session {session_id}: {temp_filepath}")
+            emit('transcription_error', {'error': 'Recording file not found'})
+            return
         
         emit('session_stopped', {'recording': recording.to_dict()})
         
