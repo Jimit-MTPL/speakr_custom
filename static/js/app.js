@@ -787,7 +787,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     processingMessage.value = 'Uploading file...';
                     processingProgress.value = 10;
 
-                    const response = await fetch('/upload', { method: 'POST', body: formData });
+                    const uploadUrl = transcriptionService.value === 'custom' ? '/upload_custom' : '/upload';
+                    const response = await fetch(uploadUrl, { method: 'POST', body: formData });
                     const data = await response.json();
 
                     if (!response.ok) {
