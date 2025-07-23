@@ -84,6 +84,7 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Real-time transcription state
         const isRealtimeMode = ref(true); // Default to real-time mode
+        const transcriptionService = ref('openai'); // 'openai' or 'custom'
         const realtimeSessionId = ref(null);
         const realtimeTranscription = ref('');
         const isTranscribing = ref(false);
@@ -1396,12 +1397,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 mediaRecorder.value.ondataavailable = (event) => {
                     if (event.data.size > 0) {
-                        socket.emit('audio_chunk', { session_id: realtimeSessionId.value, chunk: event.data });
+                        const eventName = transcriptionService.value === 'custom' ? 'audio_chunk_custom' : 'audio_chunk';
+                        socket.emit(eventName, { session_id: realtimeSessionId.value, chunk: event.data });
                     }
                 };
 
                 mediaRecorder.value.onstop = () => {
-                    socket.emit('stop_transcription', { session_id: realtimeSessionId.value });
+                    const eventName = transcriptionService.value === 'custom' ? 'stop_transcription_custom' : 'stop_transcription';
+                    socket.emit(eventName, { session_id: realtimeSessionId.value });
                 };
 
                 mediaRecorder.value.start(2000);
@@ -2744,7 +2747,8 @@ document.addEventListener('DOMContentLoaded', () => {
             // Real-time transcription
             isTranscribing,
             realtimeTranscription,
-            isRealtimeMode
+            isRealtimeMode,
+            transcriptionService
          }
     },
     delimiters: ['${', '}'] // Keep Vue delimiters distinct from Flask's Jinja

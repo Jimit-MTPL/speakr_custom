@@ -1412,6 +1412,17 @@
                                 Real-time transcription
                             </label>
                         </div>
+                        <div class="mt-4 flex items-center justify-center space-x-4">
+                            <span class="text-sm text-[var(--text-muted)]">Transcription Service:</span>
+                            <label class="flex items-center text-sm text-[var(--text-muted)]">
+                                <input type="radio" v-model="transcriptionService" value="openai" class="h-4 w-4 border-gray-300 text-blue-600 focus:ring-blue-500">
+                                <span class="ml-2">OpenAI</span>
+                            </label>
+                            <label class="flex items-center text-sm text-[var(--text-muted)]">
+                                <input type="radio" v-model="transcriptionService" value="custom" class="h-4 w-4 border-gray-300 text-blue-600 focus:ring-blue-500">
+                                <span class="ml-2">Custom</span>
+                            </label>
+                        </div>
                         <div v-if="isRecording" class="mt-3 text-[var(--text-muted)]">
                             <i class="fas fa-circle text-red-500 fa-xs blink mr-1"></i> Recording: ${ formatTime(recordingTime) }
                         </div>
