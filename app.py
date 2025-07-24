@@ -29,6 +29,7 @@ from wtforms.validators import DataRequired, Length, Email, EqualTo, ValidationE
 import pytz
 from babel.dates import format_datetime
 import time
+import requests
 
 # Load environment variables from .env file
 load_dotenv()
@@ -632,6 +633,114 @@ def transcribe_audio_asr(app_context, recording_id, filepath, original_filename,
                 recording.transcription = f"ASR processing failed: {str(e)}"
                 db.session.commit()
 
+def transcribe_audio_task_custom(app_context, recording_id, filepath, filename_for_asr, start_time):
+    """Runs the transcription and summarization in a background thread."""
+    if USE_ASR_ENDPOINT:
+        with app_context:
+            recording = db.session.get(Recording, recording_id)
+            # Environment variable ASR_DIARIZE overrides user setting
+            if 'ASR_DIARIZE' in os.environ:
+                diarize_setting = ASR_DIARIZE
+            else:
+                diarize_setting = recording.owner.diarize if recording.owner else False
+            user_transcription_language = recording.owner.transcription_language if recording.owner else None
+        transcribe_audio_asr(app_context, recording_id, filepath, filename_for_asr, start_time, mime_type=recording.mime_type, language=user_transcription_language, diarize=diarize_setting)
+        
+        # After ASR task completes, calculate processing time
+        with app_context:
+            recording = db.session.get(Recording, recording_id)
+            if recording.status in ['COMPLETED', 'FAILED']:
+                end_time = datetime.utcnow()
+                recording.processing_time_seconds = (end_time - start_time).total_seconds()
+                db.session.commit()
+        return
+
+    with app_context: # Need app context for db operations in thread
+        recording = db.session.get(Recording, recording_id)
+        if not recording:
+            app.logger.error(f"Error: Recording {recording_id} not found for transcription.")
+            return
+
+        try:
+            app.logger.info(f"Starting transcription for recording {recording_id} ({filename_for_asr})...")
+            recording.status = 'PROCESSING'
+            db.session.commit()
+
+            # --- Step 1: Transcription ---
+            # with open(filepath, 'rb') as audio_file:
+            #     transcription_client = OpenAI(
+            #         api_key=transcription_api_key,
+            #         base_url=transcription_base_url,
+            #         http_client=http_client_no_proxy
+            #     )
+            #     whisper_model = os.environ.get("WHISPER_MODEL", "Systran/faster-distil-whisper-large-v3")
+                
+            #     user_transcription_language = None
+            #     user_output_language = None
+            #     if recording and recording.owner:
+            #         user_transcription_language = recording.owner.transcription_language
+            #         user_output_language = recording.owner.output_language
+                
+            #     transcription_language = user_transcription_language
+
+            #     transcription_params = {
+            #         "model": whisper_model,
+            #         "file": audio_file
+            #     }
+
+            #     if transcription_language:
+            #         transcription_params["language"] = transcription_language
+            #         app.logger.info(f"Using transcription language: {transcription_language}")
+            #     else:
+            #         app.logger.info("Transcription language not set, using auto-detection or service default.")
+
+            #     transcript = transcription_client.audio.transcriptions.create(**transcription_params)
+            # recording.transcription = transcript.text
+            user_transcription_language = None
+            user_output_language = None
+            if recording and recording.owner:
+                user_transcription_language = recording.owner.transcription_language
+                user_output_language = recording.owner.output_language
+            
+            # transcription_language = user_transcription_language
+
+            # transcription_params = {
+            #     "model": whisper_model,
+            #     "file": audio_file
+            # }
+
+            # if transcription_language:
+            #     transcription_params["language"] = transcription_language
+            #     app.logger.info(f"Using transcription language: {transcription_language}")
+            # else:
+            #     app.logger.info("Transcription language not set, using auto-detection or service default.")
+
+            # transcript = transcription_client.audio.transcriptions.create(**transcription_params)
+            transcription = send_to_speech_api(filepath)
+            recording.transcription = transcription
+            app.logger.info(f"Transcription completed for recording {recording_id}. Text length: {len(recording.transcription)}")
+            generate_summary_task(app_context, recording_id, start_time)
+
+        except Exception as e:
+            db.session.rollback() # Rollback if any step failed critically
+            app.logger.error(f"Processing FAILED for recording {recording_id}: {str(e)}", exc_info=True)
+            # Retrieve recording again in case session was rolled back
+            recording = db.session.get(Recording, recording_id)
+            if recording:
+                 # Ensure status reflects failure even after rollback/retrieve attempt
+                if recording.status not in ['COMPLETED', 'FAILED']: # Avoid overwriting final state
+                    recording.status = 'FAILED'
+                if not recording.transcription: # If transcription itself failed
+                     recording.transcription = f"Processing failed: {str(e)}"
+                # Add error note to summary if appropriate stage was reached
+                if recording.status == 'SUMMARIZING' and not recording.summary:
+                     recording.summary = f"[Processing failed during summarization: {str(e)}]"
+                
+                end_time = datetime.utcnow()
+                recording.processing_time_seconds = (end_time - start_time).total_seconds()
+                db.session.commit()
+
+
 def transcribe_audio_task(app_context, recording_id, filepath, filename_for_asr, start_time):
     """Runs the transcription and summarization in a background thread."""
     if USE_ASR_ENDPOINT:
@@ -716,6 +825,26 @@ def transcribe_audio_task(app_context, recording_id, filepath, filename_for_asr,
                 end_time = datetime.utcnow()
                 recording.processing_time_seconds = (end_time - start_time).total_seconds()
                 db.session.commit()
+
+def send_to_speech_api(file_path):
+    """Send audio file to speech-to-text API and return transcription."""
+    try:
+        with open(file_path, 'rb') as audio_file:
+            files = {'audio': audio_file}
+            response = requests.post("https://beta15.moontechnolabs.com/audiotext/transcribe", files=files)
+            
+            if response.status_code == 200:
+                result = response.json()
+                transcription = result.get('answer', '')
+                print(f"🔊User: {transcription}")
+                #print(f"🔊 Transcription: {transcription}")
+                return transcription
+            else:
+                print(f"❌ API Error: Status code {response.status_code}")
+                return None
+    except Exception as e:
+        print(f"❌ Error sending to API: {str(e)}")
+        return None
 
 @app.route('/speakers', methods=['GET'])
 @login_required
@@ -2102,6 +2231,73 @@ def handle_start_transcription():
         app.logger.error(f"Error starting real-time transcription: {e}", exc_info=True)
         emit('transcription_error', {'error': str(e)})
 
+@socketio.on('audio_chunk_custom')
+@login_required
+def handle_audio_chunk(data):
+    session_id = data.get('session_id')
+    chunk = data.get('chunk')
+
+    if not session_id or not chunk:
+        return
+
+    try:
+        recording = db.session.get(Recording, session_id)
+        if not recording:
+            emit('transcription_error', {'error': 'Session not found'})
+            return
+
+        # Append chunk to a temporary file
+        temp_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'temp')
+        os.makedirs(temp_dir, exist_ok=True)
+        temp_filepath = os.path.join(temp_dir, f"{session_id}.webm")
+        with open(temp_filepath, 'ab') as f:
+            f.write(chunk)
+
+        # Transcribe the chunk and emit the result
+        transcription_client = OpenAI(
+            api_key=transcription_api_key,
+            base_url=transcription_base_url,
+            http_client=http_client_no_proxy
+        )
+        whisper_model = os.environ.get("WHISPER_MODEL", "Systran/faster-distil-whisper-large-v3")
+
+        # with open(temp_filepath, 'rb') as audio_file:
+        #     transcript = transcription_client.audio.transcriptions.create(
+        #         model=whisper_model,
+        #         file=audio_file
+        #     )
+        user_transcription_language = None
+        user_output_language = None
+        if recording and recording.owner:
+            user_transcription_language = recording.owner.transcription_language
+            user_output_language = recording.owner.output_language
+        
+        # transcription_language = user_transcription_language
+
+        # transcription_params = {
+        #     "model": whisper_model,
+        #     "file": audio_file
+        # }
+
+        # if transcription_language:
+        #     transcription_params["language"] = transcription_language
+        #     app.logger.info(f"Using transcription language: {transcription_language}")
+        # else:
+        #     app.logger.info("Transcription language not set, using auto-detection or service default.")
+
+        # transcript = transcription_client.audio.transcriptions.create(**transcription_params)
+        transcription = send_to_speech_api(temp_filepath)
+        recording.transcription = transcription
+
+        # recording.transcription = transcript.text
+        db.session.commit()
+
+        emit('new_transcription', {'full_transcription': recording.transcription})
+
+    except Exception as e:
+        app.logger.error(f"Error handling audio chunk: {e}", exc_info=True)
+        emit('transcription_error', {'error': str(e)})
+
 @socketio.on('audio_chunk')
 @login_required
 def handle_audio_chunk(data):
@@ -2191,6 +2387,59 @@ def handle_audio_chunk(data):
 #         app.logger.error(f"Error stopping real-time transcription: {e}", exc_info=True)
 #         emit('transcription_error', {'error': str(e)})
 
+
+@socketio.on('stop_transcription_custom')
+@login_required
+def handle_stop_transcription(data):
+    """Stop real-time transcription and generate summary"""
+    session_id = data.get('session_id')
+    if not session_id:
+        return
+
+    try:
+        recording = db.session.get(Recording, session_id)
+        if not recording:
+            emit('transcription_error', {'error': 'Session not found'})
+            return
+            
+        if recording.user_id != current_user.id:
+            emit('transcription_error', {'error': 'Unauthorized'})
+            return
+
+        temp_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'temp')
+        temp_filepath = os.path.join(temp_dir, f"{session_id}.webm")
+
+        if os.path.exists(temp_filepath):
+            recording.file_size = os.path.getsize(temp_filepath)
+            filename = f"realtime_{session_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}.webm"
+            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            
+            # Move the file
+            os.rename(temp_filepath, filepath)
+            time.sleep(4)
+            recording.audio_path = filepath
+            db.session.commit()
+
+            # Final transcription and summary - pass the full filepath, not just filename
+            start_time = datetime.utcnow()
+            thread = threading.Thread(
+                target=transcribe_audio_task_custom,
+                args=(app.app_context(), recording.id, filepath, filename, start_time)  # filepath is the full path
+            )
+            thread.start()
+        else:
+            # Handle case where temp file doesn't exist
+            app.logger.warning(f"Temp file not found for session {session_id}: {temp_filepath}")
+            emit('transcription_error', {'error': 'Recording file not found'})
+            return
+        
+        emit('session_stopped', {'recording': recording.to_dict()})
+        
+    except Exception as e:
+        app.logger.error(f"Error stopping real-time transcription: {e}", exc_info=True)
+        emit('transcription_error', {'error': str(e)})
+
+
 @socketio.on('stop_transcription')
 @login_required
 def handle_stop_transcription(data):
@@ -2241,6 +2490,110 @@ def handle_stop_transcription(data):
     except Exception as e:
         app.logger.error(f"Error stopping real-time transcription: {e}", exc_info=True)
         emit('transcription_error', {'error': str(e)})
+
+@app.route('/upload_custom', methods=['POST'])
+@login_required
+def upload_file():
+    try:
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file provided'}), 400
+
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+
+        original_filename = file.filename
+        safe_filename = secure_filename(original_filename)
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{safe_filename}")
+
+        # Get original file size
+        file.seek(0, os.SEEK_END)
+        original_file_size = file.tell()
+        file.seek(0)
+
+        # Check size limit before saving
+        if original_file_size > app.config['MAX_CONTENT_LENGTH']:
+            raise RequestEntityTooLarge()
+
+        file.save(filepath)
+        app.logger.info(f"File saved to {filepath}")
+
+        # --- Convert non-wav/mp3 files to WAV ---
+        filename_lower = original_filename.lower()
+        if not (filename_lower.endswith('.wav') or filename_lower.endswith('.mp3') or filename_lower.endswith('.flac')):
+            app.logger.info(f"Unsupported format detected ({filename_lower}). Converting to WAV.")
+            
+            base_filepath, _ = os.path.splitext(filepath)
+            temp_wav_filepath = f"{base_filepath}_temp.wav"
+            wav_filepath = f"{base_filepath}.wav"
+
+            try:
+                # Using -acodec pcm_s16le for standard WAV format, 16kHz sample rate, mono
+                subprocess.run(
+                    ['ffmpeg', '-i', filepath, '-y', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1', temp_wav_filepath],
+                    check=True, capture_output=True, text=True
+                )
+                app.logger.info(f"Successfully converted {filepath} to {temp_wav_filepath}")
+                
+                # If the original file is not the same as the final wav file, remove it
+                if filepath.lower() != wav_filepath.lower():
+                    os.remove(filepath)
+                
+                # Rename the temporary file to the final filename
+                os.rename(temp_wav_filepath, wav_filepath)
+                
+                filepath = wav_filepath
+            except FileNotFoundError:
+                app.logger.error("ffmpeg command not found. Please ensure ffmpeg is installed and in the system's PATH.")
+                return jsonify({'error': 'Audio conversion tool (ffmpeg) not found on server.'}), 500
+            except subprocess.CalledProcessError as e:
+                app.logger.error(f"ffmpeg conversion failed for {filepath}: {e.stderr}")
+                return jsonify({'error': f'Failed to convert audio file: {e.stderr}'}), 500
+
+        # Get final file size (of original or converted file)
+        final_file_size = os.path.getsize(filepath)
+
+        # Determine MIME type of the final file
+        mime_type, _ = mimetypes.guess_type(filepath)
+        app.logger.info(f"Final MIME type: {mime_type} for file {filepath}")
+
+        # Create initial database entry
+        recording = Recording(
+            audio_path=filepath,
+            original_filename=original_filename,
+            title=f"Recording - {original_filename}",
+            file_size=final_file_size,
+            status='PENDING',
+            meeting_date=datetime.utcnow().date(),
+            user_id=current_user.id,
+            mime_type=mime_type
+        )
+        db.session.add(recording)
+        db.session.commit()
+        app.logger.info(f"Initial recording record created with ID: {recording.id}")
+
+        # --- Start transcription & summarization in background thread ---
+        start_time = datetime.utcnow()
+        thread = threading.Thread(
+            target=transcribe_audio_task_custom,
+            args=(app.app_context(), recording.id, filepath, os.path.basename(filepath), start_time)
+        )
+        thread.start()
+        app.logger.info(f"Background processing thread started for recording ID: {recording.id}")
+
+        return jsonify(recording.to_dict()), 202
+
+    except RequestEntityTooLarge:
+        max_size_mb = app.config['MAX_CONTENT_LENGTH'] / (1024 * 1024)
+        app.logger.warning(f"Upload failed: File too large (>{max_size_mb}MB)")
+        return jsonify({
+            'error': f'File too large. Maximum size is {max_size_mb:.0f} MB.',
+            'max_size_mb': max_size_mb
+        }), 413
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"Error during file upload: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/upload', methods=['POST'])
 @login_required
