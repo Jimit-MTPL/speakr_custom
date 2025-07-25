@@ -70,7 +70,7 @@
                 <button @click="switchToUploadView" class="px-4 py-2 mr-2 bg-[var(--bg-button)] text-[var(--text-button)] rounded-lg shadow hover:bg-[var(--bg-button-hover)] focus:outline-none focus:ring-2 focus:ring-[var(--border-focus)] focus:ring-offset-2 transition duration-150 ease-in-out">
                     <i class="fas fa-plus mr-1"></i> New Recording
                 </button>
-                <button @click="currentView = 'realtime'" class="px-4 py-2 mr-2 bg-[var(--bg-button)] text-[var(--text-button)] rounded-lg shadow hover:bg-[var(--bg-button-hover)] focus:outline-none focus:ring-2 focus:ring-[var(--border-focus)] focus:ring-offset-2 transition duration-150 ease-in-out">
+                <button @click="showRealtimeControls = !showRealtimeControls" class="px-4 py-2 mr-2 bg-[var(--bg-button)] text-[var(--text-button)] rounded-lg shadow hover:bg-[var(--bg-button-hover)] focus:outline-none focus:ring-2 focus:ring-[var(--border-focus)] focus:ring-offset-2 transition duration-150 ease-in-out">
                     <i class="fas fa-microphone mr-1"></i> New Transcribe
                 </button>
                 <button
@@ -544,8 +544,51 @@
 
             {% if current_user.is_authenticated %}
             <div v-if="currentView === 'gallery'" class="flex-grow flex flex-col rounded-lg relative">
+                <div v-if="showRealtimeControls" class="flex-grow flex items-center justify-center p-4">
+                    <div class="w-full max-w-lg bg-[var(--bg-secondary)] p-8 rounded-xl shadow-lg border border-[var(--border-primary)] text-center drag-area">
+                        <div class="py-8">
+                            <i class="fas fa-microphone-alt text-5xl mb-5 text-[var(--text-accent)]"></i>
+                            <h2 class="text-xl font-semibold text-[var(--text-secondary)] mb-2">Real-time Transcription</h2>
+                            <p class="text-[var(--text-muted)] mb-4">Click the button below to start recording.</p>
+                            <div class="flex flex-col sm:flex-row sm:justify-center sm:items-center mt-4 space-y-3 sm:space-y-0 sm:space-x-3">
+                                <template v-if="!isRecording">
+                                    <button @click="startRecording" v-if="canRecordAudio" class="w-full sm:w-auto px-6 py-3 bg-green-500 text-white rounded-lg hover:bg-green-600 shadow-sm transition duration-150 ease-in-out flex items-center justify-center">
+                                        <i class="fas fa-microphone mr-2"></i> Record Audio
+                                    </button>
+                                </template>
+                                <button @click="stopRecording" v-if="isRecording" class="w-full sm:w-auto px-6 py-3 bg-red-500 text-white rounded-lg hover:bg-red-600 shadow-sm transition duration-150 ease-in-out flex items-center justify-center">
+                                    <i class="fas fa-stop mr-2"></i> Stop Recording
+                                </button>
+                            </div>
+                            <div class="mt-4 flex items-center justify-center">
+                                <input type="checkbox" id="realtime-toggle" v-model="isRealtimeMode" class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                                <label for="realtime-toggle" class="ml-2 block text-sm text-[var(--text-muted)]">
+                                    Real-time transcription
+                                </label>
+                            </div>
+                            <div class="mt-4 flex items-center justify-center space-x-4">
+                                <span class="text-sm text-[var(--text-muted)]">Transcription Service:</span>
+                                <label class="flex items-center text-sm text-[var(--text-muted)]">
+                                    <input type="radio" v-model="transcriptionService" value="openai" class="h-4 w-4 border-gray-300 text-blue-600 focus:ring-blue-500">
+                                    <span class="ml-2">OpenAI</span>
+                                </label>
+                                <label class="flex items-center text-sm text-[var(--text-muted)]">
+                                    <input type="radio" v-model="transcriptionService" value="custom" class="h-4 w-4 border-gray-300 text-blue-600 focus:ring-blue-500">
+                                    <span class="ml-2">Custom</span>
+                                </label>
+                            </div>
+                            <div v-if="isRecording" class="mt-3 text-[var(--text-muted)]">
+                                <i class="fas fa-circle text-red-500 fa-xs blink mr-1"></i> Recording: ${ formatTime(recordingTime) }
+                            </div>
+                            <div v-if="isTranscribing" class="mt-4 p-4 border border-[var(--border-primary)] rounded-lg bg-[var(--bg-tertiary)]">
+                                <p class="text-sm text-[var(--text-secondary)] mb-2 font-medium">Live Transcription:</p>
+                                <div class="text-sm text-[var(--text-primary)] text-left whitespace-pre-wrap">${ realtimeTranscription }</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
                 <!-- Mobile Layout (shown only on mobile when recording is selected) -->
-                <div v-if="selectedRecording" class="mobile-layout bg-[var(--bg-secondary)] rounded-lg shadow-md">
+                <div v-if="!showRealtimeControls && selectedRecording" class="mobile-layout bg-[var(--bg-secondary)] rounded-lg shadow-md">
                     <!-- New Mobile Header Section -->
                     <div class="p-4 border-b border-[var(--border-primary)]">
                         <h3 class="text-xl font-semibold text-[var(--text-primary)] mb-2 truncate" :title="selectedRecording.title || 'Loading...'">
@@ -891,7 +934,7 @@
                 </div>
 
                 <!-- Desktop Layout (shown only on desktop) -->
-                <div class="desktop-layout">
+                <div v-if="!showRealtimeControls" class="desktop-layout">
                 <!-- Sidebar toggle button that appears when sidebar is collapsed - positioned at the left edge of main content, aligned with title -->
                 <button v-if="isSidebarCollapsed && !isMobileScreen"
                         @click="toggleSidebar" 
@@ -1386,14 +1429,21 @@
                 </div>
             </div>
 
-            <div v-if="currentView === 'realtime'" class="flex-grow flex items-center justify-center p-4">
-                <div class="w-full max-w-lg bg-[var(--bg-secondary)] p-8 rounded-xl shadow-lg border border-[var(--border-primary)] text-center drag-area">
+             <div v-if="currentView === 'upload'"
+                 class="flex-grow flex items-center justify-center p-4">
+                 <div class="w-full max-w-lg bg-[var(--bg-secondary)] p-8 rounded-xl shadow-lg border border-[var(--border-primary)] text-center drag-area"
+                     :class="{'border-[var(--border-focus)] bg-[var(--bg-accent)]': dragover}">
                     <div class="py-8">
-                        <i class="fas fa-microphone-alt text-5xl mb-5 text-[var(--text-accent)]"></i>
-                        <h2 class="text-xl font-semibold text-[var(--text-secondary)] mb-2">Real-time Transcription</h2>
-                        <p class="text-[var(--text-muted)] mb-4">Click the button below to start recording.</p>
+                        <i class="fas fa-cloud-upload-alt text-5xl mb-5 text-[var(--text-accent)]"></i>
+                         <h2 class="text-xl font-semibold text-[var(--text-secondary)] mb-2">Upload New Recordings</h2>
+                        <p class="text-[var(--text-muted)] mb-4">Drag & drop your audio files here or click below.</p>
+                         <input type="file" @change="handleFileSelect" accept="audio/*" class="hidden" ref="fileInput" multiple>
                         <div class="flex flex-col sm:flex-row sm:justify-center sm:items-center mt-4 space-y-3 sm:space-y-0 sm:space-x-3">
                             <template v-if="!isRecording">
+                                <button @click="$refs.fileInput.click()" class="w-full sm:w-auto px-6 py-3 bg-[var(--bg-button)] text-[var(--text-button)] rounded-lg hover:bg-[var(--bg-button-hover)] shadow-sm transition duration-150 ease-in-out flex items-center justify-center">
+                                    <i class="fas fa-file-import mr-2"></i> Select Files
+                                </button>
+                                <!-- New Record Audio Button -->
                                 <button @click="startRecording" v-if="canRecordAudio" class="w-full sm:w-auto px-6 py-3 bg-green-500 text-white rounded-lg hover:bg-green-600 shadow-sm transition duration-150 ease-in-out flex items-center justify-center">
                                     <i class="fas fa-microphone mr-2"></i> Record Audio
                                 </button>
@@ -1425,26 +1475,6 @@
                         <div v-if="isTranscribing" class="mt-4 p-4 border border-[var(--border-primary)] rounded-lg bg-[var(--bg-tertiary)]">
                             <p class="text-sm text-[var(--text-secondary)] mb-2 font-medium">Live Transcription:</p>
                             <div class="text-sm text-[var(--text-primary)] text-left whitespace-pre-wrap">${ realtimeTranscription }</div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div v-if="currentView === 'upload'"
-                 class="flex-grow flex items-center justify-center p-4">
-                 <div class="w-full max-w-lg bg-[var(--bg-secondary)] p-8 rounded-xl shadow-lg border border-[var(--border-primary)] text-center drag-area"
-                     :class="{'border-[var(--border-focus)] bg-[var(--bg-accent)]': dragover}">
-                    <div class="py-8">
-                        <i class="fas fa-cloud-upload-alt text-5xl mb-5 text-[var(--text-accent)]"></i>
-                         <h2 class="text-xl font-semibold text-[var(--text-secondary)] mb-2">Upload New Recordings</h2>
-                        <p class="text-[var(--text-muted)] mb-4">Drag & drop your audio files here or click below.</p>
-                         <input type="file" @change="handleFileSelect" accept="audio/*" class="hidden" ref="fileInput" multiple>
-                        <div class="flex flex-col sm:flex-row sm:justify-center sm:items-center mt-4 space-y-3 sm:space-y-0 sm:space-x-3">
-                            <template v-if="!isRecording">
-                                <button @click="$refs.fileInput.click()" class="w-full sm:w-auto px-6 py-3 bg-[var(--bg-button)] text-[var(--text-button)] rounded-lg hover:bg-[var(--bg-button-hover)] shadow-sm transition duration-150 ease-in-out flex items-center justify-center">
-                                    <i class="fas fa-file-import mr-2"></i> Select Files
-                                </button>
-                            </template>
                         </div>
                         <div v-if="audioBlobURL && !isRealtimeMode" class="mt-4 p-4 border border-[var(--border-primary)] rounded-lg bg-[var(--bg-tertiary)]">
                             <p class="text-sm text-[var(--text-secondary)] mb-2 font-medium">Preview your recording:</p>
