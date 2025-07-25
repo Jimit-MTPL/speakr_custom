@@ -81,6 +81,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const recordingTime = ref(0);
         const recordingInterval = ref(null);
         const canRecordAudio = ref(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+        const isLive = ref(false);
         
         // Real-time transcription state
         const isRealtimeMode = ref(true); // Default to real-time mode
@@ -1370,6 +1371,8 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         const startRealtimeRecording = async (stream) => {
+            isLive.value = true;
+            currentView.value = 'gallery';
             const socket = io();
 
             socket.on('connect', () => {
@@ -1450,6 +1453,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (mediaRecorder.value && isRecording.value) {
                 mediaRecorder.value.stop();
                 isRecording.value = false;
+                isLive.value = false;
                 clearInterval(recordingInterval.value);
                 // The onstop handler will deal with API calls and cleanup
             }
@@ -2749,7 +2753,8 @@ document.addEventListener('DOMContentLoaded', () => {
             isTranscribing,
             realtimeTranscription,
             isRealtimeMode,
-            transcriptionService
+            transcriptionService,
+            isLive
          }
     },
     delimiters: ['${', '}'] // Keep Vue delimiters distinct from Flask's Jinja
