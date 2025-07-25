@@ -82,6 +82,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const recordingInterval = ref(null);
         const canRecordAudio = ref(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
         const isLive = ref(false);
+        const showRealtimeControls = ref(false);
         
         // Real-time transcription state
         const isRealtimeMode = ref(true); // Default to real-time mode
@@ -1332,7 +1333,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 setGlobalError('Audio recording is not supported by your browser or permission was denied.');
                 return;
             }
-            
+            showRealtimeControls.value = false;
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 
@@ -2754,7 +2755,8 @@ document.addEventListener('DOMContentLoaded', () => {
             realtimeTranscription,
             isRealtimeMode,
             transcriptionService,
-            isLive
+            isLive,
+            showRealtimeControls
          }
     },
     delimiters: ['${', '}'] // Keep Vue delimiters distinct from Flask's Jinja

@@ -930,6 +930,9 @@
 
                         <!-- Search input -->
                         <div class="relative mb-3 sticky top-12 z-10 bg-[var(--bg-secondary)]">
+                            <button @click="showRealtimeControls = !showRealtimeControls" class="w-full flex items-center justify-center mb-3 px-4 py-2 bg-[var(--bg-button)] text-[var(--text-button)] rounded-lg shadow hover:bg-[var(--bg-button-hover)] focus:outline-none focus:ring-2 focus:ring-[var(--border-focus)] focus:ring-offset-2 transition duration-150 ease-in-out">
+                                <i class="fas fa-plus mr-2"></i> New Transcribe
+                            </button>
                             <div class="flex items-center bg-[var(--bg-tertiary)] rounded-lg border border-[var(--border-primary)] focus-within:border-[var(--border-focus)] focus-within:ring-1 focus-within:ring-[var(--ring-focus)]">
                                 <i class="fas fa-search text-[var(--text-muted)] ml-3 mr-2"></i>
                                 <input 
@@ -1379,7 +1382,7 @@
                         <p class="text-sm text-[var(--text-secondary)] mb-2 font-medium">Live Transcription:</p>
                         <div class="text-sm text-[var(--text-primary)] text-left whitespace-pre-wrap">${ realtimeTranscription }</div>
                     </div>
-                    <div v-if="!isLive" class="flex flex-col items-center justify-center text-center text-[var(--text-muted)] h-full p-8">
+                    <div v-if="showRealtimeControls && !isLive" class="flex flex-col items-center justify-center text-center text-[var(--text-muted)] h-full p-8">
                         <div class="flex flex-col sm:flex-row sm:justify-center sm:items-center mt-4 space-y-3 sm:space-y-0 sm:space-x-3">
                             <template v-if="!isRecording">
                                 <!-- New Record Audio Button -->
