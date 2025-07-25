@@ -2233,7 +2233,7 @@ def handle_start_transcription():
 
 @socketio.on('audio_chunk_custom')
 @login_required
-def handle_audio_chunk(data):
+def handle_audio_chunk_custom(data):
     session_id = data.get('session_id')
     chunk = data.get('chunk')
 
@@ -2390,7 +2390,7 @@ def handle_audio_chunk(data):
 
 @socketio.on('stop_transcription_custom')
 @login_required
-def handle_stop_transcription(data):
+def handle_stop_transcription_custom(data):
     """Stop real-time transcription and generate summary"""
     session_id = data.get('session_id')
     if not session_id:
@@ -2493,7 +2493,7 @@ def handle_stop_transcription(data):
 
 @app.route('/upload_custom', methods=['POST'])
 @login_required
-def upload_file():
+def upload_file_custom():
     try:
         if 'file' not in request.files:
             return jsonify({'error': 'No file provided'}), 400
